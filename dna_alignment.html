@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sequence Aligner</title>
+<!--
+  Pairwise DNA/RNA alignment built on the framework of
+  P. A. Gagniuc & E. Gagniuc, "The sequence alignment problem: boundary conditions as the
+  unifying principle", Briefings in Bioinformatics 27(3), bbag333 (2026). doi:10.1093/bib/bbag333
+  Global, semi-global, glocal and local alignment are one dynamic-programming problem;
+  only the boundary conditions (initialization, admissible start/stop, termination) differ.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --surface: #fcfcfb; --surface-2: #f3f2ef; --text: #0b0b0b; --text-2: #52514e; --text-3: #73726c;
+  --border: #e0dfda; --grid: #ebeae5; --accent: #2a78d6; --accent-bg: #e3eefb; --path: #eb6834;
+  --mismatch: #b3261e; --wobble: #8a5a00; --gap: #73726c; --warn-bg: #fdf3e1; --warn: #7a4b00;
+  --heat-lo: #f3f7fd; --heat-mid: #86b6ef; --heat-hi: #1c5cab;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface: #1a1a19; --surface-2: #232322; --text: #f0efec; --text-2: #c3c2b7; --text-3: #9a998f;
+    --border: #3a3a37; --grid: #2e2e2c; --accent: #3987e5; --accent-bg: #1b2c42; --path: #f07a45;
+    --mismatch: #f28b82; --wobble: #e3b341; --gap: #9a998f; --warn-bg: #3a2c12; --warn: #f2c46d;
+    --heat-lo: #1e2228; --heat-mid: #1f4f8f; --heat-hi: #86b6ef;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1a1a19; --surface-2: #232322; --text: #f0efec; --text-2: #c3c2b7; --text-3: #9a998f;
+  --border: #3a3a37; --grid: #2e2e2c; --accent: #3987e5; --accent-bg: #1b2c42; --path: #f07a45;
+  --mismatch: #f28b82; --wobble: #e3b341; --gap: #9a998f; --warn-bg: #3a2c12; --warn: #f2c46d;
+  --heat-lo: #1e2228; --heat-mid: #1f4f8f; --heat-hi: #86b6ef;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 24px 16px 48px; background: var(--surface); color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 980px; margin: 0 auto; min-width: 0; }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 32px 0 10px; }
+.sub { color: var(--text-2); margin: 0 0 20px; }
+.sub a { color: var(--accent); }
+.mono, code { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+
+.card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.seqs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 680px) { .seqs { grid-template-columns: 1fr; } }
+label, .lbl { display: block; font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 4px; }
+.hint { font-weight: 400; color: var(--text-3); }
+textarea { width: 100%; min-height: 76px; resize: vertical; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font: 14px/1.4 ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+textarea:focus, input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.warn-s { color: var(--mismatch); font-size: 12px; min-height: 18px; }
+
+.row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 18px; margin-top: 12px; }
+.row + .row { padding-top: 12px; border-top: 1px solid var(--border); }
+.num input { width: 72px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font: inherit; font-variant-numeric: tabular-nums; }
+select { padding: 7px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); font: inherit; max-width: 100%; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); color: var(--text-2); padding: 7px 12px; font: inherit; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 7px 12px;
+  border-radius: 8px; font: inherit; cursor: pointer; }
+.btn:hover { border-color: var(--text-3); }
+.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text-2); padding-bottom: 7px; }
+.spacer { flex: 1; }
+[hidden] { display: none !important; }
+.alert { margin-top: 12px; padding: 8px 12px; border-radius: 8px; background: var(--warn-bg); color: var(--warn); font-size: 13px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; margin-top: 20px; }
+.tile { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+.tile .k { font-size: 12px; color: var(--text-2); }
+.tile .v { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tile .d { font-size: 12px; color: var(--text-3); }
+.custom { margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 14px;
+  padding: 8px 12px; border-radius: 8px; background: var(--accent-bg); }
+
+.aln { overflow-x: auto; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.blk { white-space: pre; font: 14px/1.35 ui-monospace, Menlo, Consolas, monospace; margin: 0 0 12px; }
+.blk:last-child { margin-bottom: 0; }
+.blk .pos, .blk .nm { color: var(--text-3); }
+.blk .x { color: var(--mismatch); font-weight: 700; }
+.blk .w { color: var(--wobble); font-weight: 700; }
+.blk .g { color: var(--gap); }
+.blk .f { color: var(--text-3); opacity: .55; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; color: var(--text-2); margin: 8px 0 0; }
+.legend b { font-family: ui-monospace, Menlo, monospace; color: var(--text); }
+
+.tbl-wrap { overflow-x: auto; }
+table.bc { border-collapse: collapse; font-size: 13px; width: 100%; min-width: 720px; }
+.bc th, .bc td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--grid); }
+.bc thead th { color: var(--text-2); font-weight: 650; border-bottom: 1px solid var(--border); }
+.bc tbody th { color: var(--text-2); font-weight: 600; white-space: nowrap; }
+.bc .on { background: var(--accent-bg); }
+.bc thead .on { color: var(--text); }
+.formula { margin-top: 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface-2); white-space: pre-wrap; font: 13px/1.6 ui-monospace, Menlo, Consolas, monospace; }
+.fn { color: var(--text-3); font-size: 12px; margin-top: 6px; }
+
+.matrix-wrap { overflow: auto; max-height: 680px; border: 1px solid var(--border); border-radius: 10px; }
+table.mx { border-collapse: collapse; font: 12px/1 ui-monospace, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.mx th, .mx td { min-width: 32px; height: 26px; text-align: center; border: 1px solid var(--grid); padding: 0 3px; }
+.mx th { position: sticky; background: var(--surface-2); color: var(--text-2); font-weight: 700; z-index: 1; }
+.mx thead th { top: 0; }
+.mx tbody th { left: 0; }
+.mx thead th:first-child { left: 0; z-index: 2; }
+.mx td { cursor: pointer; }
+.mx td.p { font-weight: 800; box-shadow: inset 0 0 0 2px var(--path); }
+.mx td.end { box-shadow: inset 0 0 0 3px var(--path); }
+canvas { display: block; max-width: 100%; image-rendering: pixelated; cursor: crosshair; }
+.note { color: var(--text-3); font-size: 13px; margin-top: 6px; }
+.scale { display: inline-flex; align-items: center; gap: 6px; margin-right: 8px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.scale i { display: inline-block; width: 90px; height: 10px; border-radius: 3px; border: 1px solid var(--border); }
+
+#tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.15); display: none; z-index: 10; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sequence aligner</h1>
+  <p class="sub">Pairwise DNA/RNA alignment as one dynamic-programming problem whose <b>boundary conditions</b>
+    decide whether it is global, semi-global, glocal or local. Based on Gagniuc &amp; Gagniuc,
+    <a href="https://doi.org/10.1093/bib/bbag333" target="_blank" rel="noopener">“The sequence alignment problem:
+    boundary conditions as the unifying principle”</a>, <i>Briefings in Bioinformatics</i> 27(3), 2026.</p>
+
+  <div class="card">
+    <div class="seqs">
+      <div>
+        <label for="s1">Sequence 1 · rows <span class="hint" id="len1"></span></label>
+        <textarea id="s1" spellcheck="false" autocomplete="off"></textarea>
+        <div class="warn-s" id="w1"></div>
+      </div>
+      <div>
+        <label for="s2">Sequence 2 · columns <span class="hint" id="len2"></span></label>
+        <textarea id="s2" spellcheck="false" autocomplete="off"></textarea>
+        <div class="warn-s" id="w2"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <span class="lbl">Boundary conditions</span>
+        <div class="seg" role="group" aria-label="Alignment mode" id="modes">
+          <button type="button" data-v="global" aria-pressed="true">Global</button>
+          <button type="button" data-v="semi" aria-pressed="false">Semi-global</button>
+          <button type="button" data-v="glocal" aria-pressed="false">Glocal</button>
+          <button type="button" data-v="local" aria-pressed="false">Local</button>
+        </div>
+      </div>
+      <div id="fullBox" hidden>
+        <label for="full">End-to-end sequence</label>
+        <select id="full"><option value="1">Sequence 1 (inside seq 2)</option><option value="2">Sequence 2 (inside seq 1)</option></select>
+      </div>
+      <div class="spacer"></div>
+      <div>
+        <label for="examples">Examples</label>
+        <select id="examples"></select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="preset">Scoring preset</label>
+        <select id="preset">
+          <option value="classic">Classic +1 / −1 / −1</option>
+          <option value="fig1">Paper Fig. 1: +10 / −5 / −7</option>
+          <option value="fig2">Paper Fig. 2: +2 / −1 / −2</option>
+          <option value="affine">Affine: +2 / −1, open −4, extend −1</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+      <div class="num"><label for="ma">Match</label><input id="ma" type="number" step="1"></div>
+      <div class="num"><label for="mi">Mismatch</label><input id="mi" type="number" step="1"></div>
+      <div>
+        <span class="lbl">Gap model</span>
+        <div class="seg" role="group" aria-label="Gap model" id="gapmodel">
+          <button type="button" data-v="linear" aria-pressed="true">Linear</button>
+          <button type="button" data-v="affine" aria-pressed="false">Affine</button>
+        </div>
+      </div>
+      <div class="num" id="gBox"><label for="g">Gap</label><input id="g" type="number" step="1"></div>
+      <div class="num" id="goBox" hidden><label for="go">Open g<sub>o</sub></label><input id="go" type="number" step="1"></div>
+      <div class="num" id="geBox" hidden><label for="ge">Extend g<sub>e</sub></label><input id="ge" type="number" step="1"></div>
+    </div>
+
+    <div class="row">
+      <div>
+        <span class="lbl">Pairing rule</span>
+        <div class="seg" role="group" aria-label="Pairing rule" id="pairing">
+          <button type="button" data-v="identity" aria-pressed="true">Identity</button>
+          <button type="button" data-v="complement" aria-pressed="false">Complementarity</button>
+        </div>
+      </div>
+      <label class="chk" id="wobbleBox" hidden><input type="checkbox" id="wobble" checked> G–U wobble pairs</label>
+      <div class="spacer"></div>
+      <button class="btn" id="swap" type="button">Swap</button>
+      <button class="btn" id="random" type="button">Random pair</button>
+    </div>
+    <div class="alert" id="alert" hidden></div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+  <div class="custom" id="customBar" hidden></div>
+
+  <h2>Alignment</h2>
+  <div class="aln" id="aln"></div>
+  <div class="legend" id="alnLegend"></div>
+
+  <h2>Score matrix &amp; traceback path</h2>
+  <div id="matrix"></div>
+  <p class="note" id="mxnote"></p>
+
+  <h2>Boundary conditions</h2>
+  <div class="tbl-wrap"><table class="bc" id="bc"></table></div>
+  <p class="fn">Global and local columns follow Table 1 of the paper. Semi-global and glocal are the paper’s
+    other two boundary-condition realizations, filled in with their standard definitions.</p>
+  <div class="formula" id="formula"></div>
+</main>
+<div id="tip"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const MAX_LEN = 4000;
+const NEG = -1e15;
+
+/* ======================= state ======================= */
+const S = { mode: "global", gap: "linear", pairing: "identity", custom: null };
+
+const PRESETS = {
+  classic: { ma: 1, mi: -1, gap: "linear", g: -1 },
+  fig1:    { ma: 10, mi: -5, gap: "linear", g: -7 },
+  fig2:    { ma: 2, mi: -1, gap: "linear", g: -2 },
+  affine:  { ma: 2, mi: -1, gap: "affine", go: -4, ge: -1 },
+};
+
+const EXAMPLES = [
+  { name: "Textbook pair (global)", a: "ACCGTGAAGCCAATAC", b: "AGCGTGCAGCCAATAC", mode: "global", preset: "classic", pairing: "identity" },
+  { name: "Overlapping read ends (semi-global)", a: "TTACCGTGAAGCCAATAC", b: "GAAGCCAATACGGTCATT", mode: "semi", preset: "fig2", pairing: "identity" },
+  { name: "Fragment inside a gene (glocal)", a: "GTGCAGCCTAT", b: "TTACCGTGAAGCCAATACGGTCA", mode: "glocal", preset: "fig2", pairing: "identity" },
+  { name: "Shared motif (local, Fig. 1 scores)", a: "TTTTTTGCATGCATCCCCCC", b: "AAAAGGCATGGATAAAAA", mode: "local", preset: "fig1", pairing: "identity" },
+  { name: "RNA duplex (local, complementarity)", a: "GGAUCCGAUGCUAGCAA", b: "AAACUAGCAUCGGUUU", mode: "local", preset: "fig2", pairing: "complement" },
+  { name: "Gene with an indel (affine gaps)", a: "ATGGCGTACGTTAGCCTAGGATCCA", b: "ATGGCGTACGCCTAGGATCCA", mode: "global", preset: "affine", pairing: "identity" },
+];
+
+/* ======================= input ======================= */
+function clean(raw) {
+  const body = raw.split(/\r?\n/).filter(l => !l.startsWith(">")).join("").toUpperCase();
+  const letters = body.replace(/[\s\d]/g, "");
+  const seq = letters.replace(/[^ACGTUN]/g, "");
+  return { seq: seq.slice(0, MAX_LEN), dropped: letters.length - seq.length, cut: seq.length > MAX_LEN };
+}
+
+function params() {
+  const num = id => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : 0; };
+  const P = { ma: num("ma"), mi: num("mi"), pairing: S.pairing, wobble: $("wobble").checked };
+  if (S.gap === "linear") { P.go = 0; P.ge = num("g"); }
+  else { P.go = num("go"); P.ge = num("ge"); }
+  return P;
+}
+
+/* ======================= scoring ======================= */
+const WC = new Set(["AT", "TA", "AU", "UA", "CG", "GC"]);
+const WOB = new Set(["GU", "UG"]);
+function pairKind(x, y, P) {               // 'm' match/pair, 'w' wobble, 'x' mismatch
+  if (x === "N" || y === "N") return "x";
+  if (P.pairing === "identity") return x === y || (x + y === "TU") || (x + y === "UT") ? "m" : "x";
+  const p = x + y;
+  if (WC.has(p)) return "m";
+  if (P.wobble && WOB.has(p)) return "w";
+  return "x";
+}
+const subScore = (k, P) => (k === "x" ? P.mi : P.ma);
+
+/* ======================= boundary conditions ======================= */
+// rows i = sequence 1 (a), columns j = sequence 2 (b)
+// top  : first row free    -> a leading part of seq 2 may stay unaligned
+// left : first column free -> a leading part of seq 1 may stay unaligned
+// endRow: may terminate anywhere in the last row    -> trailing part of seq 2 unaligned
+// endCol: may terminate anywhere in the last column -> trailing part of seq 1 unaligned
+function boundaries(mode, full) {
+  switch (mode) {
+    case "global": return { local: false, top: false, left: false, endRow: false, endCol: false };
+    case "semi":   return { local: false, top: true,  left: true,  endRow: true,  endCol: true };
+    case "glocal": return full === 1
+      ? { local: false, top: true, left: false, endRow: true, endCol: false }
+      : { local: false, top: false, left: true, endRow: false, endCol: true };
+    case "local":  return { local: true, top: true, left: true, endRow: true, endCol: true };
+  }
+}
+
+/* ======================= DP engine (Gotoh, three states) ======================= */
+// Gap of length k scores go + k*ge  (linear model: go = 0, ge = g).
+// M = last column pairs a_i with b_j; X = a_i against a gap; Y = b_j against a gap.
+// Traceback pointers: 0 = from M, 1 = from X, 2 = from Y, 3 = local start (score restarted at 0).
+function fill(a, b, P, B) {
+  const n = a.length, m = b.length, W = m + 1, N = (n + 1) * W;
+  const M = new Float64Array(N).fill(NEG), X = new Float64Array(N).fill(NEG), Y = new Float64Array(N).fill(NEG);
+  const tM = new Uint8Array(N), tX = new Uint8Array(N), tY = new Uint8Array(N);
+  const K = new Uint8Array(N);              // pair kind per cell: 0 match, 1 wobble, 2 mismatch
+  const open = P.go + P.ge, ext = P.ge;
+
+  M[0] = 0;
+  if (B.local) {
+    for (let i = 1; i <= n; i++) M[i * W] = 0;
+    for (let j = 1; j <= m; j++) M[j] = 0;
+  } else {
+    for (let i = 1; i <= n; i++) { X[i * W] = B.left ? 0 : P.go + i * P.ge; tX[i * W] = i === 1 ? 0 : 1; }
+    for (let j = 1; j <= m; j++) { Y[j] = B.top ? 0 : P.go + j * P.ge; tY[j] = j === 1 ? 0 : 2; }
+  }
+
+  for (let i = 1; i <= n; i++) {
+    const ai = a[i - 1];
+    for (let j = 1; j <= m; j++) {
+      const k = i * W + j, d = k - W - 1, u = k - W, l = k - 1;
+      const kind = pairKind(ai, b[j - 1], P);
+      K[k] = kind === "m" ? 0 : kind === "w" ? 1 : 2;
+      // M: diagonal step
+      let v = M[d], t = 0;
+      if (X[d] > v) { v = X[d]; t = 1; }
+      if (Y[d] > v) { v = Y[d]; t = 2; }
+      if (B.local && v <= 0) { v = 0; t = 3; }
+      M[k] = v + subScore(kind, P); tM[k] = t;
+      // X: vertical step (gap in seq 2)
+      v = M[u] + open; t = 0;
+      if (X[u] + ext > v) { v = X[u] + ext; t = 1; }
+      if (Y[u] + open > v) { v = Y[u] + open; t = 2; }
+      X[k] = v; tX[k] = t;
+      // Y: horizontal step (gap in seq 1)
+      v = M[l] + open; t = 0;
+      if (Y[l] + ext > v) { v = Y[l] + ext; t = 2; }
+      if (X[l] + open > v) { v = X[l] + open; t = 1; }
+      Y[k] = v; tY[k] = t;
+    }
+  }
+  const V = new Float64Array(N);
+  for (let k = 0; k < N; k++) {
+    let v = M[k]; if (X[k] > v) v = X[k]; if (Y[k] > v) v = Y[k];
+    V[k] = B.local ? Math.max(0, v) : v;
+  }
+  return { n, m, W, M, X, Y, tM, tX, tY, K, V };
+}
+
+function bestState(D, k) {
+  let s = 0, v = D.M[k];
+  if (D.X[k] > v) { v = D.X[k]; s = 1; }
+  if (D.Y[k] > v) { s = 2; }
+  return s;
+}
+
+function terminal(D, B) {
+  const { n, m, W, V } = D;
+  let bi = n, bj = m, bv = V[n * W + m];
+  if (B.local) {
+    bv = -Infinity;
+    for (let i = 0; i <= n; i++) for (let j = 0; j <= m; j++) if (V[i * W + j] > bv) { bv = V[i * W + j]; bi = i; bj = j; }
+  } else {
+    if (B.endRow) for (let j = 0; j <= m; j++) if (V[n * W + j] > bv) { bv = V[n * W + j]; bi = n; bj = j; }
+    if (B.endCol) for (let i = 0; i <= n; i++) if (V[i * W + m] > bv) { bv = V[i * W + m]; bi = i; bj = m; }
+  }
+  return [bi, bj];
+}
+
+// cols: [charA, charB, kind] with kind m/w/x (paired), g (scored gap), f (free terminal gap)
+function traceback(D, a, b, B, ei, ej, fromCustom) {
+  const { n, m, W } = D;
+  const cols = [], path = [];
+  const KIND = ["m", "w", "x"];
+  if (!B.local && !fromCustom) {               // free trailing overhangs
+    for (let j = m; j > ej; j--) { cols.push(["-", b[j - 1], "f"]); path.push([n, j]); }
+    for (let i = n; i > ei; i--) { cols.push([a[i - 1], "-", "f"]); path.push([i, m]); }
+  }
+  let i = ei, j = ej, k = i * W + j;
+  if (B.local && D.V[k] <= 0) return { cols: [], path: [[i, j]], s1: i + 1, s2: j + 1, e1: i, e2: j, score: 0 };
+  let st = bestState(D, k);
+  const score = D.V[k];
+  path.push([i, j]);
+  while (i > 0 || j > 0) {
+    if (i === 0 || j === 0) {
+      if (B.local) break;
+      if (i === 0) for (; j > 0; j--) { cols.push(["-", b[j - 1], B.top ? "f" : "g"]); path.push([0, j - 1]); }
+      else for (; i > 0; i--) { cols.push([a[i - 1], "-", B.left ? "f" : "g"]); path.push([i - 1, 0]); }
+      break;
+    }
+    k = i * W + j;
+    if (st === 0) {
+      const t = D.tM[k];
+      cols.push([a[i - 1], b[j - 1], KIND[D.K[k]]]); i--; j--; path.push([i, j]);
+      if (t === 3) break;                         // local alignment restarted here (score 0)
+      st = t;
+    } else if (st === 1) {
+      st = D.tX[k]; cols.push([a[i - 1], "-", "g"]); i--; path.push([i, j]);
+    } else {
+      st = D.tY[k]; cols.push(["-", b[j - 1], "g"]); j--; path.push([i, j]);
+    }
+  }
+  cols.reverse();
+  return { cols, path, s1: i + 1, s2: j + 1, e1: ei, e2: ej, score };
+}
+
+// s1, s2: index of the first residue of each sequence used by cols (1-based, in the DP orientation)
+function stats(cols, s1, s2) {
+  let mt = 0, wb = 0, mm = 0, gp = 0, opens = 0, free = 0, prev = "";
+  let q1 = s1, q2 = s2, r1 = null, r2 = null;            // core (non-free) residue ranges
+  const grow = (r, q) => (r ? [r[0], q] : [q, q]);
+  for (const [x, y, k] of cols) {
+    if (k !== "f") { if (x !== "-") r1 = grow(r1, q1); if (y !== "-") r2 = grow(r2, q2); }
+    if (x !== "-") q1++; if (y !== "-") q2++;
+    if (k === "m") mt++; else if (k === "w") wb++; else if (k === "x") mm++;
+    else if (k === "f") free++;
+    else { gp++; const side = x === "-" ? "A" : "B"; if (prev !== side) opens++; prev = side; continue; }
+    prev = "";
+  }
+  const L = mt + wb + mm + gp;
+  return { L, mt, wb, mm, gp, opens, free, r1, r2, identity: L ? (mt + wb) / L * 100 : 0 };
+}
+
+/* ======================= rendering ======================= */
+const ALG = { global: "Needleman–Wunsch", semi: "end-gap-free NW", glocal: "fitting / glocal DP", local: "Smith–Waterman" };
+const fmt = v => (Number.isInteger(v) ? String(v) : v.toFixed(2));
+
+function renderTiles(R, st, P, n2) {
+  const t = (k, v, d) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+  const comp = P.pairing === "complement";
+  const o2 = q => (comp ? n2 - q + 1 : q);
+  const rng1 = st.r1 ? `${st.r1[0]}–${st.r1[1]}` : "none";
+  const rng2 = st.r2 ? `${o2(st.r2[0])}–${o2(st.r2[1])}` : "none";
+  const pc = n => (st.L ? (n / st.L * 100).toFixed(1) + "% of columns" : "—");
+  $("tiles").innerHTML =
+    t("Score", fmt(R.score), ALG[S.mode] + (S.gap === "affine" ? " + Gotoh" : "")) +
+    t(comp ? "Paired" : "Identity", st.identity.toFixed(1) + "%",
+      `${st.mt + st.wb} of ${st.L} columns` + (st.wb ? ` (${st.wb} wobble)` : "")) +
+    t("Mismatches", st.mm, pc(st.mm)) +
+    t("Gaps", st.gp, `${st.opens} gap opening${st.opens === 1 ? "" : "s"}`) +
+    t("Free end gaps", st.free, S.mode === "local" ? "flanks not shown" : "unscored overhang") +
+    t("Aligned", st.L, `seq 1: ${rng1} · seq 2: ${rng2}`);
+}
+
+function renderAlignment(R, comp, n1, n2) {
+  const cols = R.cols;
+  if (!cols.length) { $("aln").innerHTML = `<div class="note">Empty alignment: no cell scores above zero.</div>`; return; }
+  const CH = 60;
+  const pos2 = q => (comp ? n2 - q + 1 : q);     // displayed seq2 index -> original coordinate
+  const name2 = comp ? "Seq2 3′→5′" : "Seq2";
+  const nm1 = "Seq1".padEnd(name2.length);
+  const pad = String(Math.max(n1, n2, 1)).length;
+  let q1 = R.s1, q2 = R.s2, out = "";
+  // free leading gaps don't consume residues until a residue is printed, so counters advance per residue
+  for (let k = 0; k < cols.length; k += CH) {
+    const blk = cols.slice(k, k + CH);
+    let la = "", lm = "", lb = "", c1 = 0, c2 = 0;
+    for (const [x, y, kind] of blk) {
+      if (x !== "-") c1++; if (y !== "-") c2++;
+      if (kind === "f") { la += `<span class="f">${x}</span>`; lb += `<span class="f">${y}</span>`; lm += " "; }
+      else if (kind === "g") {
+        la += x === "-" ? `<span class="g">-</span>` : x;
+        lb += y === "-" ? `<span class="g">-</span>` : y; lm += " ";
+      }
+      else if (kind === "m") { la += x; lb += y; lm += "|"; }
+      else if (kind === "w") { la += `<span class="w">${x}</span>`; lb += `<span class="w">${y}</span>`; lm += `<span class="w">:</span>`; }
+      else { la += `<span class="x">${x}</span>`; lb += `<span class="x">${y}</span>`; lm += `<span class="x">.</span>`; }
+    }
+    const lab = v => `<span class="pos">${String(v).padStart(pad)}</span>`;
+    const r1 = c1 ? [q1, q1 + c1 - 1] : [q1 - 1, q1 - 1];
+    const r2 = c2 ? [pos2(q2), pos2(q2 + c2 - 1)] : [pos2(q2 - 1), pos2(q2 - 1)];
+    out += `<div class="blk"><span class="nm">${nm1}</span> ${lab(r1[0])} ${la} ${lab(r1[1])}\n` +
+           `${" ".repeat(name2.length)} ${" ".repeat(pad)} ${lm}\n` +
+           `<span class="nm">${name2}</span> ${lab(r2[0])} ${lb} ${lab(r2[1])}</div>`;
+    q1 += c1; q2 += c2;
+  }
+  $("aln").innerHTML = out;
+  $("alnLegend").innerHTML = (comp ? `<span><b>|</b> Watson–Crick pair</span><span><b>:</b> G–U wobble</span><span><b>.</b> non-pairing (red)</span>`
+                                   : `<span><b>|</b> match</span><span><b>.</b> mismatch (red)</span>`) +
+    `<span><b>-</b> scored gap</span><span style="opacity:.6"><b>ACGT</b> dimmed = free terminal overhang</span>`;
+}
+
+function heat(css) {
+  const rgb = v => { const x = css.getPropertyValue(v).trim(); return [1, 3, 5].map(o => parseInt(x.substr(o, 2), 16)); };
+  const lo = rgb("--heat-lo"), mid = rgb("--heat-mid"), hi = rgb("--heat-hi");
+  const at = t => { const [c0, c1, f] = t < 0.5 ? [lo, mid, t * 2] : [mid, hi, (t - 0.5) * 2];
+    return [0, 1, 2].map(z => Math.round(c0[z] + (c1[z] - c0[z]) * f)); };
+  return { lo, mid, hi, at };
+}
+const lum = ([r, g, b]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+function renderMatrix(D, R, a, b) {
+  const { n, m, W, V } = D;
+  const cells = (n + 1) * (m + 1);
+  const onPath = new Set(R.path.map(([i, j]) => i * W + j));
+  const endKey = R.e1 * W + R.e2;
+  const css = getComputedStyle(document.documentElement);
+  const H = heat(css);
+  let mn = Infinity, mx = -Infinity;
+  for (let k = 0; k < V.length; k++) { if (V[k] < mn) mn = V[k]; if (V[k] > mx) mx = V[k]; }
+  const span = mx - mn || 1;
+  const scaleHTML = `<span class="scale">${fmt(mn)}<i style="background:linear-gradient(90deg,rgb(${H.lo}),rgb(${H.mid}),rgb(${H.hi}))"></i>${fmt(mx)}</span>`;
+  const endTxt = S.custom ? "the clicked cell" : (S.mode === "local" ? "the highest-scoring cell" : "the termination cell");
+
+  if (cells <= 1600) {
+    let h = `<div class="matrix-wrap"><table class="mx"><thead><tr><th></th><th>–</th>`;
+    for (let j = 0; j < m; j++) h += `<th>${b[j]}</th>`;
+    h += `</tr></thead><tbody>`;
+    for (let i = 0; i <= n; i++) {
+      h += `<tr><th>${i ? a[i - 1] : "–"}</th>`;
+      for (let j = 0; j <= m; j++) {
+        const k = i * W + j, c = H.at((V[k] - mn) / span);
+        const ink = lum(c) > 0.5 ? "#0b0b0b" : "#f4f3ef";
+        const cls = (onPath.has(k) ? "p" : "") + (k === endKey ? " end" : "");
+        h += `<td class="${cls}" data-i="${i}" data-j="${j}" style="background:rgb(${c});color:${ink}">${fmt(V[k])}</td>`;
+      }
+      h += `</tr>`;
+    }
+    $("matrix").innerHTML = h + `</tbody></table></div>`;
+    $("mxnote").innerHTML = `${scaleHTML} Rows = sequence 1, columns = sequence ${S.pairing === "complement" ? "2 (reversed, 3′→5′)" : "2"}. ` +
+      `Cell = best of M, X, Y. Outlined cells are the traceback path; the thick outline is ${endTxt}. ` +
+      `<b>Click any cell</b> to trace back from it (paper Fig. 1B).`;
+    return;
+  }
+  if (cells > 4e6) {
+    $("matrix").innerHTML = "";
+    $("mxnote").textContent = `The matrix has ${cells.toLocaleString()} cells, too many to draw. The alignment above is still exact.`;
+    return;
+  }
+  const box = $("matrix");
+  box.innerHTML = `<div class="matrix-wrap" style="max-height:none"><canvas id="cv"></canvas></div>`;
+  const cv = $("cv");
+  const avail = Math.min(box.clientWidth - 2, 960);
+  const cs = Math.max(1, Math.min(8, Math.floor(avail / (m + 1))));
+  const scale = Math.min(1, avail / ((m + 1) * cs));
+  const w = Math.max(1, Math.floor((m + 1) * cs * scale)), hgt = Math.max(1, Math.floor((n + 1) * cs * scale));
+  cv.width = w; cv.height = hgt;
+  const ctx = cv.getContext("2d"), img = ctx.createImageData(w, hgt);
+  const sx = (m + 1) / w, sy = (n + 1) / hgt;
+  for (let y = 0; y < hgt; y++) {
+    const i = Math.min(n, Math.floor(y * sy));
+    for (let x = 0; x < w; x++) {
+      const j = Math.min(m, Math.floor(x * sx));
+      const c = H.at((V[i * W + j] - mn) / span), o = (y * w + x) * 4;
+      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  ctx.strokeStyle = css.getPropertyValue("--path").trim();
+  ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.beginPath();
+  R.path.forEach(([i, j], q) => { const x = (j + 0.5) / sx, y = (i + 0.5) / sy; q ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.stroke();
+  const cell = e => { const rc = cv.getBoundingClientRect();
+    return [Math.min(n, Math.floor((e.clientY - rc.top) / rc.height * (n + 1))),
+            Math.min(m, Math.floor((e.clientX - rc.left) / rc.width * (m + 1)))]; };
+  const tip = $("tip");
+  cv.onmousemove = e => {
+    const [i, j] = cell(e);
+    tip.innerHTML = `Row <b>${i}</b> (${i ? a[i - 1] : "–"}) · Col <b>${j}</b> (${j ? b[j - 1] : "–"})<br>Score <b>${fmt(V[i * W + j])}</b>`;
+    tip.style.display = "block";
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + "px";
+    tip.style.top = (e.clientY + 14) + "px";
+  };
+  cv.onmouseleave = () => { tip.style.display = "none"; };
+  cv.onclick = e => { S.custom = cell(e); run(); };
+  $("mxnote").innerHTML = `${scaleHTML} Heatmap of the ${n + 1}×${m + 1} score matrix; the orange line is the traceback path. ` +
+    `Hover to read a cell, click to trace back from it. The numeric table is shown up to 1,600 cells.`;
+}
+
+/* ---- boundary-condition table (paper Table 1, extended) and active recurrences ---- */
+const BC_ROWS = [
+  ["Boundary conditions", "Fixed sequence ends", "Free terminal gaps on both sequences", "One sequence fixed end-to-end, internal boundaries on the other", "Free internal start and stop"],
+  ["Initialization", "Cumulative terminal gap penalties", "Zero first row and column", "Zero on the partial sequence’s axis, cumulative on the other", "Zero initialized boundaries"],
+  ["Termination", "Bottom right cell", "Best cell in last row or last column", "Best cell in the last row (or column)", "Highest scoring cell"],
+  ["Traceback", "From bottom right to origin", "From end cell to first row or column", "From end cell to the free boundary", "From maximum score to zero"],
+  ["Terminal gaps", "Penalized", "Not penalized", "Free on the partial sequence only", "Not scored outside local core"],
+  ["Main objective", "Aligns full sequences", "Aligns overlapping ends", "Places a whole sequence inside another", "Aligns best subsequences"],
+  ["Best suited for", "Similar, collinear sequences", "Read overlaps, contig assembly", "Reads, primers, exons on a longer sequence", "Motifs, domains, fragments"],
+  ["Main limitation", "Sensitive to rearrangement", "Assumes a collinear overlap", "Forces the full sequence to align", "Loses full sequence context"],
+];
+function renderBoundaryInfo(B, P) {
+  const modes = ["global", "semi", "glocal", "local"], names = ["Global", "Semi-global", "Glocal", "Local"];
+  const on = q => (modes[q] === S.mode ? ' class="on"' : "");
+  let h = `<thead><tr><th>Property</th>${names.map((x, q) => `<th${on(q)}>${x}</th>`).join("")}</tr></thead><tbody>`;
+  for (const r of BC_ROWS) h += `<tr><th>${r[0]}</th>${r.slice(1).map((x, q) => `<td${on(q)}>${x}</td>`).join("")}</tr>`;
+  $("bc").innerHTML = h + "</tbody>";
+
+  const s = "s(xᵢ,yⱼ)";
+  const z = B.local ? "0, " : "";
+  let f = "";
+  if (S.gap === "linear") {
+    f += `F(i,j) = max{ ${z}F(i−1,j−1) + ${s},  F(i−1,j) + g,  F(i,j−1) + g }      g = ${fmt(P.ge)}\n`;
+  } else {
+    f += `Gap of length k scores g(k) = gₒ + k·gₑ      gₒ = ${fmt(P.go)}, gₑ = ${fmt(P.ge)}\n`;
+    f += `M(i,j)  = max{ ${z}M, Iₓ, I_y at (i−1,j−1) } + ${s}\n`;
+    f += `Iₓ(i,j) = max{ M(i−1,j) + gₒ+gₑ,  Iₓ(i−1,j) + gₑ,  I_y(i−1,j) + gₒ+gₑ }\n`;
+    f += `I_y(i,j)= max{ M(i,j−1) + gₒ+gₑ,  I_y(i,j−1) + gₑ,  Iₓ(i,j−1) + gₒ+gₑ }\n`;
+    f += `F(i,j)  = max{ ${z}M, Iₓ, I_y }\n`;
+  }
+  const g = S.gap === "linear" ? "g·" : "gₒ + gₑ·";
+  const init = {
+    global: `F(0,j) = ${g}j,   F(i,0) = ${g}i`,
+    semi:   `F(0,j) = 0,   F(i,0) = 0`,
+    glocal: $("full").value === "1" ? `F(0,j) = 0,   F(i,0) = ${g}i` : `F(0,j) = ${g}j,   F(i,0) = 0`,
+    local:  `H(0,j) = 0,   H(i,0) = 0`,
+  }[S.mode];
+  const term = {
+    global: "score = F(n,m); traceback from (n,m) to (0,0)",
+    semi:   "score = max over last row ∪ last column; traceback until row 0 or column 0",
+    glocal: $("full").value === "1" ? "score = max over last row F(n,·); traceback until row 0" : "score = max over last column F(·,m); traceback until column 0",
+    local:  "score = max over all cells; traceback until the score first returns to 0",
+  }[S.mode];
+  f += `Boundaries:   ${init}\nTermination:  ${term}\n`;
+  f += `s(x,y) = ${fmt(P.ma)} if ${P.pairing === "complement" ? "x pairs with y (A–T/U, C–G" + (P.wobble ? ", G–U" : "") + "; seq 2 read 3′→5′)" : "x = y"}, else ${fmt(P.mi)}`;
+  $("formula").textContent = f;
+}
+
+/* ======================= main ======================= */
+function run() {
+  const c1 = clean($("s1").value), c2 = clean($("s2").value);
+  const warn = c => (c.dropped ? `${c.dropped} unsupported character(s) ignored (allowed: A C G T U N). ` : "") + (c.cut ? `Truncated to ${MAX_LEN} nt.` : "");
+  $("w1").textContent = warn(c1); $("w2").textContent = warn(c2);
+  $("len1").textContent = `(${c1.seq.length} nt)`; $("len2").textContent = `(${c2.seq.length} nt)`;
+
+  const P = params();
+  const comp = P.pairing === "complement";
+  const a = c1.seq, b = comp ? [...c2.seq].reverse().join("") : c2.seq;
+  const B = boundaries(S.mode, parseInt($("full").value, 10));
+  const D = fill(a, b, P, B);
+  if (S.custom && (S.custom[0] > D.n || S.custom[1] > D.m)) S.custom = null;
+  const [ei, ej] = S.custom || terminal(D, B);
+  const R = traceback(D, a, b, B, ei, ej, !!S.custom);
+  const st = stats(R.cols, R.s1, R.s2);
+
+  renderTiles(R, st, P, b.length);
+  renderAlignment(R, comp, a.length, b.length);
+  renderMatrix(D, R, a, b);
+  renderBoundaryInfo(B, P);
+
+  // custom traceback banner
+  if (S.custom) {
+    $("customBar").hidden = false;
+    $("customBar").innerHTML = `Tracing back from cell (${ei}, ${ej}) instead of the ${S.mode === "local" ? "maximum" : "termination"} cell.
+      <button class="btn" id="resetTb" type="button">Reset to optimal</button>`;
+    $("resetTb").onclick = () => { S.custom = null; run(); };
+  } else $("customBar").hidden = true;
+
+  // parameter sanity notes
+  const notes = [];
+  if (S.mode === "local") {
+    const exp = 0.25 * P.ma + 0.75 * P.mi;     // uniform base composition
+    if (exp >= 0) notes.push(`The expected score of a random position is ${exp.toFixed(2)} (≥ 0), so local alignment behaves like a global one. Make mismatches more negative.`);
+    if (P.ge >= 0 || P.go > 0) notes.push("Local alignment needs a gap penalty (gap score below 0).");
+  }
+  if (P.ma <= P.mi) notes.push("The match score should be higher than the mismatch score.");
+  $("alert").hidden = !notes.length; $("alert").textContent = notes.join(" ");
+}
+
+/* ======================= wiring ======================= */
+function setSeg(id, v) { document.querySelectorAll(`#${id} button`).forEach(x => x.setAttribute("aria-pressed", String(x.dataset.v === v))); }
+function setMode(v) { S.mode = v; setSeg("modes", v); $("fullBox").hidden = v !== "glocal"; }
+function setGap(v) { S.gap = v; setSeg("gapmodel", v); $("gBox").hidden = v !== "linear"; $("goBox").hidden = $("geBox").hidden = v !== "affine"; }
+function setPairing(v) { S.pairing = v; setSeg("pairing", v); $("wobbleBox").hidden = v !== "complement"; }
+function applyPreset(name) {
+  const p = PRESETS[name]; if (!p) return;
+  $("ma").value = p.ma; $("mi").value = p.mi; setGap(p.gap);
+  if (p.gap === "linear") $("g").value = p.g; else { $("go").value = p.go; $("ge").value = p.ge; }
+  if ($("g").value === "") $("g").value = -1;
+  if ($("go").value === "") { $("go").value = -4; $("ge").value = -1; }
+  $("preset").value = name;
+}
+function loadExample(q) {
+  const e = EXAMPLES[q];
+  $("s1").value = e.a; $("s2").value = e.b; setMode(e.mode); setPairing(e.pairing); applyPreset(e.preset);
+  $("full").value = "1"; $("examples").value = String(q); S.custom = null; run();
+}
+
+$("examples").innerHTML = EXAMPLES.map((e, q) => `<option value="${q}">${e.name}</option>`).join("");
+$("examples").onchange = e => loadExample(+e.target.value);
+document.querySelectorAll("#modes button").forEach(x => x.onclick = () => { setMode(x.dataset.v); S.custom = null; run(); });
+document.querySelectorAll("#gapmodel button").forEach(x => x.onclick = () => { setGap(x.dataset.v); $("preset").value = "custom"; S.custom = null; run(); });
+document.querySelectorAll("#pairing button").forEach(x => x.onclick = () => { setPairing(x.dataset.v); S.custom = null; run(); });
+$("preset").onchange = e => { applyPreset(e.target.value); S.custom = null; run(); };
+let pending = 0;
+const schedule = () => { S.custom = null; cancelAnimationFrame(pending); pending = requestAnimationFrame(run); };
+["s1", "s2"].forEach(id => $(id).addEventListener("input", schedule));
+["ma", "mi", "g", "go", "ge"].forEach(id => $(id).addEventListener("input", () => { $("preset").value = "custom"; schedule(); }));
+$("full").onchange = () => { S.custom = null; run(); };
+$("wobble").onchange = () => { S.custom = null; run(); };
+$("matrix").addEventListener("click", e => {
+  const td = e.target.closest("td[data-i]"); if (!td) return;
+  S.custom = [+td.dataset.i, +td.dataset.j]; run();
+});
+$("swap").onclick = () => { const t = $("s1").value; $("s1").value = $("s2").value; $("s2").value = t; S.custom = null; run(); };
+$("random").onclick = () => {
+  const L = 18 + Math.floor(Math.random() * 14), N = S.pairing === "complement" ? "ACGU" : "ACGT";
+  const a = Array.from({ length: L }, () => N[Math.floor(Math.random() * 4)]);
+  const b = [];
+  for (const ch of a) {
+    const r = Math.random();
+    if (r < 0.10) b.push(N[Math.floor(Math.random() * 4)]);
+    else if (r < 0.16) continue;
+    else if (r < 0.22) b.push(ch, N[Math.floor(Math.random() * 4)]);
+    else b.push(ch);
+  }
+  $("s1").value = a.join(""); $("s2").value = b.join(""); S.custom = null; run();
+};
+let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(run, 150); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", run);
+
+$("g").value = -1; $("go").value = -4; $("ge").value = -1;
+loadExample(0);
+</script>
+</body>
+</html>
